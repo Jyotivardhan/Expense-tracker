@@ -1,6 +1,18 @@
 import bcrypt from "bcryptjs"
 import jwt from "jsonwebtoken"
 import User from "../models/User.js"
+import Category from "../models/category.js"
+
+const DEFAULT_CATEGORIES = [
+    {name: 'Food', color: '#ff5722'},
+    {name: 'Transport', color: '#2196f3'},
+    {name: 'Bills', color: '#9c27b0'},
+    {name: 'Entertainment', color: '#ff9800'},
+    {name: 'Shopping', color: '#4caf50'},
+    {name: 'Health', color: '#e91e63'},
+    {name: 'Other', color: '#607d8b'},
+
+]
 
 const signToken = (userId) =>{
     return jwt.sign(
@@ -27,6 +39,10 @@ export const register = async (req,res) =>{
             email,
             password:hashedpassword
         })
+        await Category.insertMany(
+            DEFAULT_CATEGORIES.map((c) => ({ ...c, user: user._id }))
+        );
+        
         const token = signToken(user._id) 
         res.status(201).json({
             token,

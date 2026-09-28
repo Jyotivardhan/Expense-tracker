@@ -1,6 +1,7 @@
 import express from "express"
 import expenseRoutes from './routes/expense.routes.js'
 import authRoutes from './routes/auth.routes.js'
+import categoryRoutes from './routes/category.routes.js'
 
 const app = express()
 
@@ -16,6 +17,7 @@ app.get('/health', (req,res)=>{
 
 app.use('/api/expenses' , expenseRoutes);
 app.use('/api/auth' , authRoutes)
+app.use('/api/categories', categoryRoutes)
 
 
 export default app;

@@ -7,6 +7,12 @@ const expenseSchema = new mongoose.Schema({
         required: true,
         index: true
     },
+    category:{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Category',
+        required : true,
+        index:true
+    },
     amount:{
         type: Number,
         required: true,
@@ -20,6 +26,8 @@ const expenseSchema = new mongoose.Schema({
         type: Date,
         default: Date.now
     }
-}, {timestamps : true})
+}, {timestamps : true});
+
+expenseSchema.index({user: 1, date: -1});
 
 export default mongoose.model('Expense', expenseSchema)
