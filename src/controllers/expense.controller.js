@@ -27,10 +27,40 @@ export const createExpense = async (req,res) =>{
 
 export const listExpenses = async (req ,res)=>{
     try {
-        const expenses = await Expense.find({ user: req.userId }).populate('category', 'name color').sort({date : -1})
-        res.json(expenses);
+        const {category , from ,to, page = 1, limit = 20} = req.query;
+        const filter = {user: req.userId};
+
+        if(category){
+            filter.category = category;
+        }
+        if(from || to){
+            filter.date = {};
+            if (from) filter.date.$gte = new Date(from);
+            if (to) filter.date.$lte = new Date(to);
+        }
+
+        const pageNum = Math.max(1, parseInt(page, 10));
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
+        const skip = (pageNum - 1) * limitNum;
+
+        const [items, total] = await Promise.all([
+            Expense.find(filter)
+                .populate('category', 'name color')
+                .sort({ date: -1 })
+                .skip(skip)
+                .limit(limitNum),
+            Expense.countDocuments(filter)
+        ]);
+
+        res.json({
+            items,
+            total,
+            page: pageNum,
+            limit: limitNum,
+            totalPages: Math.ceil(total / limitNum)
+        });
     } catch (err) {
-        res.status(500).json({error : err.message});
+        res.status(500).json({ error: err.message })
     }
 };
 
@@ -80,5 +110,55 @@ export const deleteExpense = async (req, res)=>{
         res.status(204).send();
     }catch(err){
         res.status(400).json({error: err.message});
+    }
+}
+
+export const summary = async (req,res) =>{
+    try {
+        const {month, year} = req.query;
+        const match = { user: req.userId};
+
+        if(month && year){
+            const start = new Date(Date.UTC(Number(year), Number(month)-1, 1));
+            const end = new Date(Date.UTC(Number(year), Number(month), 1))
+            match.date = { $gte: start, $lt: end};
+        }
+        const result = await Expense.aggregate([
+            {$match : match},
+            {
+                $group : {
+                    _id: '$category',
+                    total: {$sum : '$amount'},
+                    count: { $sum: 1}
+                }
+            },
+            {
+                $lookup: {
+                    from: 'categories',
+                    localField: '_id',
+                    foreignField: '_id',
+                    as: 'category'
+                }   
+            },
+            {$unwind: '$category'},
+            {
+                $project:{
+                    _id: 0,
+                    categoryId: '$_id',
+                    category: '$category.name',
+                    color: '$category.color',
+                    total: 1,
+                    count: 1
+                }
+            },
+            { $sort : {total: -1}}
+        ]);
+        const grandTotal = result.reduce((sum,r)=>sum + r.total, 0);
+        res.json({
+            grandTotal,
+            breakdown: result
+        })
+    } catch (err) {
+        res.status(500).json({error : err.message})
     }
 }
