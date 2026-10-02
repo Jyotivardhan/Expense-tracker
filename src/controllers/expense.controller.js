@@ -1,164 +1,161 @@
 import Expense from "../models/Expense.js";
-import Category from '../models/category.js'
+import Category from '../models/category.js';
+import { ApiError } from '../utils/ApiError.js';
+import { asyncHandler } from '../utils/asyncHandler.js';
 
-export const createExpense = async (req,res) =>{
-    try{
-        const {category, amount, note, date} = req.body;
+export const createExpense = asyncHandler(async (req,res) =>{
+  const { category, amount, note, date } = req.body;
 
-        if(!category){
-            return res.status(400).json({error:'Category is required'})
-        }
+  const validCategory = await Category.findOne({
+    _id: category,
+    user: req.userId
+  });
 
-        const validCategory = await Category.findOne({
-            _id: category,
-            user: req.userId
-        })
-        if(!validCategory){
-            return res.status(400).json({error: 'Invalid category'})
-        }
+  if (!validCategory) throw new ApiError(400, 'Invalid category');
 
-        const expense = await Expense.create({user: req.userId, category, amount, note, date});
+  const expense = await Expense.create({
+    user: req.userId,
+    category,
+    amount,
+    note,
+    date
+  });
 
-        res.status(201).json(expense);
-    }catch(err){
-        res.status(400).json({error : err.message});
-    }
-};
+  await expense.populate('category', 'name color');
 
-export const listExpenses = async (req ,res)=>{
-    try {
-        const {category , from ,to, page = 1, limit = 20} = req.query;
-        const filter = {user: req.userId};
+  res.status(201).json(expense);
+});
 
-        if(category){
-            filter.category = category;
-        }
-        if(from || to){
-            filter.date = {};
-            if (from) filter.date.$gte = new Date(from);
-            if (to) filter.date.$lte = new Date(to);
-        }
+export const listExpenses = asyncHandler(async (req ,res)=>{
+  const { category, from, to, page, limit } = req.validatedQuery;
 
-        const pageNum = Math.max(1, parseInt(page, 10));
-        const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
-        const skip = (pageNum - 1) * limitNum;
+  const filter = { user: req.userId };
 
-        const [items, total] = await Promise.all([
-            Expense.find(filter)
-                .populate('category', 'name color')
-                .sort({ date: -1 })
-                .skip(skip)
-                .limit(limitNum),
-            Expense.countDocuments(filter)
-        ]);
+  if (category) filter.category = category;
 
-        res.json({
-            items,
-            total,
-            page: pageNum,
-            limit: limitNum,
-            totalPages: Math.ceil(total / limitNum)
-        });
-    } catch (err) {
-        res.status(500).json({ error: err.message })
-    }
-};
+  if (from || to) {
+    filter.date = {};
+    if (from) filter.date.$gte = from;
+    if (to) filter.date.$lte = to;
+  }
 
-export const getExpense = async (req, res) =>{
-    try {
-        const expense = await Expense.findOne({_id:req.params.id, user:req.userId}).populate('category', 'name color');
-        if(!expense) return res.status(404).json({error: "Expense not found"});
-        return res.json(expense);
-    } catch (err) {
-        res.status(400).json({error: err.message})
-    }
-}
+  const skip = (page - 1) * limit;
 
-export const updateExpense = async (req,res) =>{
-    try {
-        const {category, amount , note, date} = req.body;
+  const [items, total] = await Promise.all([
+    Expense.find(filter)
+      .populate('category', 'name color')
+      .sort({ date: -1 })
+      .skip(skip)
+      .limit(limit),
+    Expense.countDocuments(filter)
+  ]);
 
-        if(category){
-            const validCategory = await Category.findOne({
-                _id: category,
-                user: req.userId
-            });
-            if(!validCategory){
-                return res.status(400).json({error: 'Invalid category'})
-            }
-        }
-        const update = {};
-        if (category !== undefined) update.category = category;
-        if (amount !== undefined) update.amount = amount;
-        if (note !== undefined) update.note = note;
-        if (date !== undefined) update.date = date;
+  res.json({
+    items,
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit)
+  });
+});
 
+export const summary = asyncHandler(async (req, res) => {
+  const { month, year } = req.query;
 
+  const match = { user: req.userId };
 
-        const expense = await Expense.findOneAndUpdate({ _id: req.params.id, user: req.userId } , update, {new:true, runValidators: true}.populate('category' , 'name color'))
-        if(!expense) return res.status(404).json({error : "Expense not found"})
-        res.json(expense);
-    } catch (err) {
-        res.status(400).json({error: err.message})
-    }
-}
+  if (month && year) {
+    const start = new Date(Date.UTC(Number(year), Number(month) - 1, 1));
+    const end = new Date(Date.UTC(Number(year), Number(month), 1));
+    match.date = { $gte: start, $lt: end };
+  }
+
+  const result = await Expense.aggregate([
+    { $match: match },
+    {
+      $group: {
+        _id: '$category',
+        total: { $sum: '$amount' },
+        count: { $sum: 1 }
+      }
+    },
+    {
+      $lookup: {
+        from: 'categories',
+        localField: '_id',
+        foreignField: '_id',
+        as: 'category'
+      }
+    },
+    { $unwind: '$category' },
+    {
+      $project: {
+        _id: 0,
+        categoryId: '$_id',
+        category: '$category.name',
+        color: '$category.color',
+        total: 1,
+        count: 1
+      }
+    },
+    { $sort: { total: -1 } }
+  ]);
+
+  const grandTotal = result.reduce((sum, r) => sum + r.total, 0);
+
+  res.json({
+    grandTotal,
+    breakdown: result
+  });
+});
+
+export const getExpense = asyncHandler(async (req, res) =>{
+  const expense = await Expense.findOne({
+    _id: req.params.id,
+    user: req.userId
+  }).populate('category', 'name color');
+
+  if (!expense) throw new ApiError(404, 'Expense not found');
+
+  res.json(expense);
+})
+
+export const updateExpense = asyncHandler(async (req,res) =>{
+  const { category, amount, note, date } = req.body;
+
+  if (category) {
+    const validCategory = await Category.findOne({
+      _id: category,
+      user: req.userId
+    });
+    if (!validCategory) throw new ApiError(400, 'Invalid category');
+  }
+
+  const update = {};
+  if (category !== undefined) update.category = category;
+  if (amount !== undefined) update.amount = amount;
+  if (note !== undefined) update.note = note;
+  if (date !== undefined) update.date = date;
+
+  const expense = await Expense.findOneAndUpdate(
+    { _id: req.params.id, user: req.userId },
+    update,
+    { new: true, runValidators: true }
+  ).populate('category', 'name color');
+
+  if (!expense) throw new ApiError(404, 'Expense not found');
+
+  res.json(expense);
+});
 
 export const deleteExpense = async (req, res)=>{
-    try{
-        const expense = await Expense.findOneAndDelete({_id: req.params.id, user: req.userId});
-        if(!expense) return res.status(404).json({error: 'Expense not found'});
-        res.status(204).send();
-    }catch(err){
-        res.status(400).json({error: err.message});
-    }
+  const expense = await Expense.findOneAndDelete({
+    _id: req.params.id,
+    user: req.userId
+  });
+
+  if (!expense) throw new ApiError(404, 'Expense not found');
+
+  res.status(204).send();
 }
 
-export const summary = async (req,res) =>{
-    try {
-        const {month, year} = req.query;
-        const match = { user: req.userId};
-
-        if(month && year){
-            const start = new Date(Date.UTC(Number(year), Number(month)-1, 1));
-            const end = new Date(Date.UTC(Number(year), Number(month), 1))
-            match.date = { $gte: start, $lt: end};
-        }
-        const result = await Expense.aggregate([
-            {$match : match},
-            {
-                $group : {
-                    _id: '$category',
-                    total: {$sum : '$amount'},
-                    count: { $sum: 1}
-                }
-            },
-            {
-                $lookup: {
-                    from: 'categories',
-                    localField: '_id',
-                    foreignField: '_id',
-                    as: 'category'
-                }   
-            },
-            {$unwind: '$category'},
-            {
-                $project:{
-                    _id: 0,
-                    categoryId: '$_id',
-                    category: '$category.name',
-                    color: '$category.color',
-                    total: 1,
-                    count: 1
-                }
-            },
-            { $sort : {total: -1}}
-        ]);
-        const grandTotal = result.reduce((sum,r)=>sum + r.total, 0);
-        res.json({
-            grandTotal,
-            breakdown: result
-        })
-    } catch (err) {
-        res.status(500).json({error : err.message})
-    }
-}

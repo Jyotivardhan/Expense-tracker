@@ -2,6 +2,8 @@ import bcrypt from "bcryptjs"
 import jwt from "jsonwebtoken"
 import User from "../models/User.js"
 import Category from "../models/category.js"
+import { ApiError } from '../utils/ApiError.js';
+import { asyncHandler } from '../utils/asyncHandler.js';
 
 const DEFAULT_CATEGORIES = [
     {name: 'Food', color: '#ff5722'},
@@ -22,16 +24,12 @@ const signToken = (userId) =>{
     )
 };
 
-export const register = async (req,res) =>{
+export const register = asyncHandler(async(req,res) =>{
     try {
         const {name, email, password} = req.body;
-        if(!name || !email || !password){
-            return res.status(400).json({error: "Name , email, and password are required"})
-        }
         const existing = await User.findOne({email})
-        if(existing){
-            return res.status(409).json({error: "Email already registered"})
-        }
+        if(existing) throw new ApiError(409, 'Email already registered')
+        
         const hashedpassword = await bcrypt.hash(password,10);
 
         const user = await User.create({
@@ -55,22 +53,16 @@ export const register = async (req,res) =>{
     } catch (error) {
         res.status(500).json({error: err.message});
     }
-}
+})
 
-export const login = async(req,res)=>{
+export const login = asyncHandler(async(req,res)=>{
     try {
         const {email , password} = req.body;
-        if(!email || !password){
-            return res.status(400).json({email : 'Email and password are required'});
-        }
-        const user = await User.findOne({email})
-        if(!user){
-            return res.status(401).json({error : 'Invalid credentials'})
-        }
-        const isMatch = await bcrypt.compare(password,user.password)
-        if(!isMatch){
-            return res.status(401).json({error:'Invalid credentials'})
-        }
+        const user = await User.findOne({ email });
+        if (!user) throw new ApiError(401, 'Invalid credentials');
+
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) throw new ApiError(401, 'Invalid credentials');
         const token = signToken(user._id)
         res.json({
             token,
@@ -83,4 +75,4 @@ export const login = async(req,res)=>{
     } catch (err) {
         res.status(500).json({error: err.message})
     }
-}
+})
